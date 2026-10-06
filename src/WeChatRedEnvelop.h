@@ -232,38 +232,42 @@
 
 #pragma mark - MMTableView
 
-@interface WCTableViewManager
+@interface WCTableViewManager : NSObject
 
 - (void)clearAllSection;
 - (id)getTableView;
 - (void)insertSection:(id)arg1 At:(unsigned int)arg2;
 - (void)addSection:(id)arg1;
-- (void)addTableViewToSuperView:(id)arg1;	// IMP=0x0000000100da4684
-
+- (void)addTableViewToSuperView:(id)arg1;
+- (NSInteger)getSectionCount;
+- (id)getSectionAt:(NSInteger)arg1;
 
 @end    
 
-@interface WCTableViewSectionManager
+@interface WCTableViewSectionManager : NSObject
 
 + (id)sectionInfoDefaut;
++ (id)sectionInfoDefault;
 + (id)sectionInfoHeader:(id)arg1;
 + (id)sectionInfoHeader:(id)arg1 Footer:(id)arg2;
 - (void)addCell:(id)arg1;
+- (NSInteger)getCellCount;
+- (id)getCellAt:(NSInteger)arg1;
 
 @end
 
-@interface WCTableViewCellManager
+@interface WCTableViewCellManager : NSObject
 
 + (id)normalCellForSel:(SEL)arg1 target:(id)arg2 title:(id)arg3;
-+ (id)normalCellForSel:(SEL)arg1 target:(id)arg2 title:(id)arg3 rightValue:(id)arg4 accessoryType:(long long)arg5;	// IMP=0x000000010188f9e4
-
++ (id)normalCellForSel:(SEL)arg1 target:(id)arg2 title:(id)arg3 rightValue:(id)arg4 accessoryType:(long long)arg5;
 + (id)switchCellForSel:(SEL)arg1 target:(id)arg2 title:(id)arg3 on:(_Bool)arg4;
 
 @end
 
-@interface WCTableViewNormalCellManager
+@interface WCTableViewNormalCellManager : NSObject
 
 + (id)normalCellForTitle:(id)arg1 rightValue:(id)arg2;
++ (id)normalCellForSel:(SEL)arg1 target:(id)arg2 title:(id)arg3 rightValue:(id)arg4 accessoryType:(long long)arg5;
 
 @end
 
@@ -388,6 +392,13 @@
 @property(nonatomic, weak) id <MultiSelectContactsViewControllerDelegate> m_delegate; // @synthesize m_delegate;
 
 - (void)updatePanelBtn;
+
+@end
+
+@interface FavPickViewController : UIViewController
+
+@property(nonatomic, weak) id m_delegate;
+- (void)OnSelectFavoritesItem:(id)item;
 
 @end
 
