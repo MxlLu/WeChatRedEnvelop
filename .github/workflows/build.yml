@@ -32,9 +32,8 @@ jobs:
 
       - name: Set up iOS SDKs
         run: |
-          git clone --depth=1 https://github.com/theos/sdks.git /tmp/theos-sdks
-          cp -r /tmp/theos-sdks/*.sdk ~/theos/sdks/
-          rm -rf /tmp/theos-sdks
+          sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+          curl -fsSL https://github.com/theos/sdks/releases/download/master-146e41f/iPhoneOS16.5.sdk.tar.xz | tar -xJ -C ~/theos/sdks
 
       - name: Create Artifact Directory
         run: |
