@@ -95,6 +95,7 @@
 - (BOOL)canPerformAction:(SEL)action withSender:(id)sender;
 - (void)showContextMenu;
 - (id)viewController;
+- (void)wb_onForwardVoice:(id)sender;
 
 @end
 
@@ -363,6 +364,8 @@
 @interface NewSettingViewController: MMUIViewController
 
 - (void)reloadTableData;
+- (void)wb_insertHelperSectionIfNeeded;
+- (void)setting;
 
 @end
 
