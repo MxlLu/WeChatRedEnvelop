@@ -3,3 +3,5 @@ obj
 *.deb
 .theos/
 .DS_Store
+build-output/
+dylib_package/

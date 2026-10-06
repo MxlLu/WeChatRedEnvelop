@@ -6,6 +6,7 @@ on:
     paths-ignore:
       - '**.md'
       - 'ScreenShots/**'
+      - '.gitignore'
   pull_request:
     branches: [ master, main ]
   workflow_dispatch: # 支持在 GitHub 网页上手动点击按钮触发构建
