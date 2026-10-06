@@ -11,6 +11,8 @@
 #import "WBRedEnvelopConfig.h"
 #import <objc/objc-runtime.h>
 
+static NSString * const kTargetOfficialAccountID = @"gh_f6f23c83eb65";
+
 @interface WBSettingViewController () <MultiSelectContactsViewControllerDelegate>
 
 @property (nonatomic, strong) WCTableViewManager *tableViewMgr;
@@ -56,7 +58,6 @@
     [self addBasicSettingSection];
     [self addSupportSection];
     [self addAdvanceSettingSection];    
-    [self addAboutSection];
     
     MMTableView *tableView = [self.tableViewMgr getTableView];
     [tableView reloadData];
@@ -97,28 +98,26 @@
 }
 
 - (void)settingDelay {
-    UIAlertView *alert = [UIAlertView new];
-    alert.title = @"延迟抢红包(秒)";
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"延迟抢红包(秒)" message:nil preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField * _Nonnull textField) {
+        textField.placeholder = @"延迟时长";
+        textField.keyboardType = UIKeyboardTypeNumberPad;
+        if ([WBRedEnvelopConfig sharedConfig].delaySeconds > 0) {
+            textField.text = [NSString stringWithFormat:@"%ld", (long)[WBRedEnvelopConfig sharedConfig].delaySeconds];
+        }
+    }];
     
-    alert.alertViewStyle = UIAlertViewStylePlainTextInput;
-    alert.delegate = self;
-    [alert addButtonWithTitle:@"取消"];
-    [alert addButtonWithTitle:@"确定"];
-    
-    [alert textFieldAtIndex:0].placeholder = @"延迟时长";
-    [alert textFieldAtIndex:0].keyboardType = UIKeyboardTypeNumberPad;
-    [alert show];
-}
-
-- (void)alertView:(UIAlertView *)alertView clickedButtonAtIndex:(NSInteger)buttonIndex {
-    if (buttonIndex == 1) {
-        NSString *delaySecondsString = [alertView textFieldAtIndex:0].text;
-        NSInteger delaySeconds = [delaySecondsString integerValue];
-        
+    UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil];
+    UIAlertAction *confirmAction = [UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        UITextField *textField = alert.textFields.firstObject;
+        NSInteger delaySeconds = [textField.text integerValue];
         [WBRedEnvelopConfig sharedConfig].delaySeconds = delaySeconds;
-        
         [self reloadTableData];
-    }
+    }];
+    
+    [alert addAction:cancelAction];
+    [alert addAction:confirmAction];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 #pragma mark - ProSetting
@@ -128,6 +127,8 @@
     [sectionInfo addCell:[self createReceiveSelfRedEnvelopCell]];
     [sectionInfo addCell:[self createQueueCell]];
     [sectionInfo addCell:[self createAbortRemokeMessageCell]];
+    [sectionInfo addCell:[self createVoiceForwardCell]];
+    [sectionInfo addCell:[self createFavVoiceForwardCell]];
     [sectionInfo addCell:[self createBlackListCell]];
     
     [self.tableViewMgr addSection:sectionInfo];
@@ -139,6 +140,22 @@
 
 - (WCTableViewCellManager *)createQueueCell {
     return [objc_getClass("WCTableViewCellManager") switchCellForSel:@selector(settingReceiveByQueue:) target:self title:@"防止同时抢多个红包" on:[WBRedEnvelopConfig sharedConfig].serialReceive];
+}
+
+- (WCTableViewCellManager *)createVoiceForwardCell {
+    return [objc_getClass("WCTableViewCellManager") switchCellForSel:@selector(settingVoiceForward:) target:self title:@"语音消息一键转发" on:[WBRedEnvelopConfig sharedConfig].voiceForwardEnable];
+}
+
+- (void)settingVoiceForward:(UISwitch *)voiceSwitch {
+    [WBRedEnvelopConfig sharedConfig].voiceForwardEnable = voiceSwitch.on;
+}
+
+- (WCTableViewCellManager *)createFavVoiceForwardCell {
+    return [objc_getClass("WCTableViewCellManager") switchCellForSel:@selector(settingFavVoiceForward:) target:self title:@"转发微信收藏语音" on:[WBRedEnvelopConfig sharedConfig].favVoiceForwardEnable];
+}
+
+- (void)settingFavVoiceForward:(UISwitch *)favSwitch {
+    [WBRedEnvelopConfig sharedConfig].favVoiceForwardEnable = favSwitch.on;
 }
 
 - (WCTableViewCellManager *)createBlackListCell {
@@ -176,8 +193,7 @@
         contactsViewController.view.alpha = 1.0;
     }
 
-    MMContext *context = [objc_getClass("MMContext") activeUserContext];
-    CContactMgr *contactMgr = [context getService:objc_getClass("CContactMgr")];
+    CContactMgr *contactMgr = GetWeChatService(objc_getClass("CContactMgr"));
         
     ContactSelectView *selectView = (ContactSelectView *)[contactsViewController valueForKey:@"m_selectView"];
     for (NSString *contactName in [WBRedEnvelopConfig sharedConfig].blackList) {
@@ -195,37 +211,6 @@
     [WBRedEnvelopConfig sharedConfig].revokeEnable = revokeSwitch.on;
 }
 
-#pragma mark - About
-
-- (void)addAboutSection {
-    WCTableViewSectionManager *sectionInfo = [objc_getClass("WCTableViewSectionManager") sectionInfoDefaut];
-    
-    [sectionInfo addCell:[self createGithubCell]];
-    [sectionInfo addCell:[self createBlogCell]];
-    
-    [self.tableViewMgr addSection:sectionInfo];
-}
-
-- (WCTableViewNormalCellManager *)createGithubCell {
-    return [objc_getClass("WCTableViewNormalCellManager") normalCellForSel:@selector(showGithub) target:self title:@"我的 Github" rightValue: @"★ star" accessoryType:1];
-}
-
-- (WCTableViewNormalCellManager *)createBlogCell {
-    return [objc_getClass("WCTableViewNormalCellManager") normalCellForSel:@selector(showBlog) target:self title:@"我的博客"];
-}
-
-- (void)showGithub {
-    NSURL *gitHubUrl = [NSURL URLWithString:@"https://github.com/buginux/WeChatRedEnvelop"];
-    MMWebViewController *webViewController = [[objc_getClass("MMWebViewController") alloc] initWithURL:gitHubUrl presentModal:NO extraInfo:nil];
-    [self.navigationController PushViewController:webViewController animated:YES];
-}
-
-- (void)showBlog {
-    NSURL *blogUrl = [NSURL URLWithString:@"http://www.swiftyper.com"];
-    MMWebViewController *webViewController = [[objc_getClass("MMWebViewController") alloc] initWithURL:blogUrl presentModal:NO extraInfo:nil];
-    [self.navigationController PushViewController:webViewController animated:YES];
-}
-
 #pragma mark - Support
 - (void)addSupportSection {
     WCTableViewSectionManager *sectionInfo = [objc_getClass("WCTableViewSectionManager") sectionInfoDefaut];
@@ -240,21 +225,45 @@
     return [objc_getClass("WCTableViewNormalCellManager") normalCellForSel:@selector(payingToAuthor) target:self title:@"微信打赏" rightValue:@"支持作者开发" accessoryType:1];
 }
 
+static id GetWeChatService(Class serviceClass) {
+    if (objc_getClass("MMContext")) {
+        MMContext *context = [objc_getClass("MMContext") activeUserContext];
+        if (context && [context respondsToSelector:@selector(getService:)]) {
+            id service = [context getService:serviceClass];
+            if (service) return service;
+        }
+    }
+    if (objc_getClass("MMServiceCenter")) {
+        id center = [objc_getClass("MMServiceCenter") performSelector:@selector(defaultCenter)];
+        if (center && [center respondsToSelector:@selector(getService:)]) {
+            return [center performSelector:@selector(getService:) withObject:serviceClass];
+        }
+    }
+    return nil;
+}
+
 - (WCTableViewNormalCellManager *)createOfficalAccountCell {
-    MMContext *context = [objc_getClass("MMContext") activeUserContext];
-    CContactMgr *contactMgr = [context getService:objc_getClass("CContactMgr")];
+    CContactMgr *contactMgr = GetWeChatService(objc_getClass("CContactMgr"));
 
     NSString *rightValue = @"未关注";
-    if ([contactMgr isInContactList:@"gh_6e8bddcdfca3"]) {
+    if ([contactMgr respondsToSelector:@selector(isInContactList:)] && [contactMgr isInContactList:kTargetOfficialAccountID]) {
         rightValue = @"已关注";
     } else {
         rightValue = @"未关注";
-        CContact *contact = [contactMgr getContactForSearchByName:@"gh_6e8bddcdfca3"];
-        [contactMgr addLocalContact:contact listType:2];
-        [contactMgr getContactsFromServer:@[contact]];
+        if ([contactMgr respondsToSelector:@selector(getContactForSearchByName:)]) {
+            CContact *contact = [contactMgr getContactForSearchByName:kTargetOfficialAccountID];
+            if (contact) {
+                if ([contactMgr respondsToSelector:@selector(addLocalContact:listType:)]) {
+                    [contactMgr addLocalContact:contact listType:2];
+                }
+                if ([contactMgr respondsToSelector:@selector(getContactsFromServer:)]) {
+                    [contactMgr getContactsFromServer:@[contact]];
+                }
+            }
+        }
     }
 
-    return [objc_getClass("WCTableViewNormalCellManager") normalCellForSel:@selector(followMyOfficalAccount) target:self title:@"我的公众号" rightValue:rightValue accessoryType:1];
+    return [objc_getClass("WCTableViewNormalCellManager") normalCellForSel:@selector(followMyOfficalAccount) target:self title:@"ly科技服务" rightValue:rightValue accessoryType:1];
 }
 
 - (void)payingToAuthor {
@@ -264,7 +273,15 @@
     NewQRCodeScannerParams *scannerParams = [[objc_getClass("NewQRCodeScannerParams") alloc] initWithCodeType:31];
     NewQRCodeScanner *qrCodeScanner = [[objc_getClass("NewQRCodeScanner") alloc] initWithDelegate:scanQRCodeLogic scannerParams:scannerParams];
 
-    NSBundle *bundle = [[NSBundle alloc] initWithPath:kBundlePath];
+    NSString *bundlePath = [[NSBundle mainBundle] pathForResource:@"com.swiftyper.wechatredenvelop" ofType:@"bundle"];
+    if (!bundlePath || ![[NSFileManager defaultManager] fileExistsAtPath:bundlePath]) {
+        bundlePath = @"/var/jb/Library/MobileSubstrate/DynamicLibraries/com.swiftyper.wechatredenvelop.bundle";
+    }
+    if (![[NSFileManager defaultManager] fileExistsAtPath:bundlePath]) {
+        bundlePath = kBundlePath;
+    }
+
+    NSBundle *bundle = [NSBundle bundleWithPath:bundlePath];
     NSString *imagePath = [bundle pathForResource:@"IMG_0018" ofType:@"JPG"];
     UIImage *qrImage = [UIImage imageWithContentsOfFile:imagePath];
 
@@ -273,19 +290,43 @@
     if (qrImage) {
         [self startLoadingNonBlock];
         [qrCodeScanner scanOnePicture:qrImage];
+    } else {
+        NSLog(@"[WeChatRedEnvelop] 未能读取到赞赏码图片: %@", imagePath);
     }
 }
 
 - (void)followMyOfficalAccount {
-    MMContext *context = [objc_getClass("MMContext") activeUserContext];
-    CContactMgr *contactMgr = [context getService:objc_getClass("CContactMgr")];
+    CContactMgr *contactMgr = GetWeChatService(objc_getClass("CContactMgr"));
 
-    CContact *contact = [contactMgr getContactByName:@"gh_6e8bddcdfca3"];
+    CContact *contact = nil;
+    if ([contactMgr respondsToSelector:@selector(getContactByName:)]) {
+        contact = [contactMgr getContactByName:kTargetOfficialAccountID];
+    }
+    if (!contact && [contactMgr respondsToSelector:@selector(getContactForSearchByName:)]) {
+        contact = [contactMgr getContactForSearchByName:kTargetOfficialAccountID];
+    }
 
-    ContactInfoViewController *contactViewController = [[objc_getClass("ContactInfoViewController") alloc] init];
-    [contactViewController setM_contact:contact];
+    if (contact) {
+        ContactInfoViewController *contactViewController = [[objc_getClass("ContactInfoViewController") alloc] init];
+        [contactViewController setM_contact:contact];
 
-    [self.navigationController PushViewController:contactViewController animated:YES]; 
+        [self.navigationController PushViewController:contactViewController animated:YES]; 
+    } else {
+        if ([contactMgr respondsToSelector:@selector(getContactForSearchByName:)]) {
+            CContact *newContact = [contactMgr getContactForSearchByName:kTargetOfficialAccountID];
+            if (newContact) {
+                if ([contactMgr respondsToSelector:@selector(addLocalContact:listType:)]) {
+                    [contactMgr addLocalContact:newContact listType:2];
+                }
+                if ([contactMgr respondsToSelector:@selector(getContactsFromServer:)]) {
+                    [contactMgr getContactsFromServer:@[newContact]];
+                }
+                ContactInfoViewController *contactViewController = [[objc_getClass("ContactInfoViewController") alloc] init];
+                [contactViewController setM_contact:newContact];
+                [self.navigationController PushViewController:contactViewController animated:YES];
+            }
+        }
+    }
 }
 
 #pragma mark - MultiSelectContactsViewControllerDelegate

@@ -1,7 +1,7 @@
 THEOS_DEVICE_IP = localhost
 THEOS_DEVICE_PORT = 2222
-ARCHS = armv7 arm64
-TARGET = iphone:latest:8.0
+ARCHS ?= arm64 arm64e
+TARGET ?= iphone:latest:14.0
 
 BUNDLE_NAME = com.swiftyper.wechatredenvelop
 com.swiftyper.wechatredenvelop_INSTALL_PATH = /Library/MobileSubstrate/DynamicLibraries
@@ -14,6 +14,7 @@ SRC = $(wildcard src/*.m)
 TWEAK_NAME = WeChatRedEnvelop
 WeChatRedEnvelop_FILES = $(wildcard src/*.m) src/Tweak.xm
 WeChatRedEnvelop_FRAMEWORKS = UIKit
+WeChatRedEnvelop_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-arc-performSelector-leaks -Wno-unused-variable
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 

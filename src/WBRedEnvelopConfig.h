@@ -21,5 +21,7 @@
 @property (assign, nonatomic) BOOL serialReceive;
 @property (strong, nonatomic) NSArray *blackList;
 @property (assign, nonatomic) BOOL revokeEnable;
+@property (assign, nonatomic) BOOL voiceForwardEnable;
+@property (assign, nonatomic) BOOL favVoiceForwardEnable;
 
 @end

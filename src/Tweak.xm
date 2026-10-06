@@ -5,20 +5,92 @@
 #import "WBRedEnvelopTaskManager.h"
 #import "WBRedEnvelopConfig.h"
 #import "WBRedEnvelopParamQueue.h"
+#import "WBVoiceForwardManager.h"
+#import <objc/objc-runtime.h>
+
+static id GetWeChatService(Class serviceClass) {
+	if (objc_getClass("MMContext")) {
+		MMContext *context = [objc_getClass("MMContext") activeUserContext];
+		if (context && [context respondsToSelector:@selector(getService:)]) {
+			id service = [context getService:serviceClass];
+			if (service) return service;
+		}
+		if ([objc_getClass("MMContext") respondsToSelector:@selector(currentContext)]) {
+			id current = [objc_getClass("MMContext") performSelector:@selector(currentContext)];
+			if (current && [current respondsToSelector:@selector(getService:)]) {
+				id service = [current performSelector:@selector(getService:) withObject:serviceClass];
+				if (service) return service;
+			}
+		}
+	}
+	if (objc_getClass("MMServiceCenter")) {
+		id center = [objc_getClass("MMServiceCenter") performSelector:@selector(defaultCenter)];
+		if (center && [center respondsToSelector:@selector(getService:)]) {
+			return [center performSelector:@selector(getService:) withObject:serviceClass];
+		}
+	}
+	return nil;
+}
+
+static NSDictionary *ParseQueryString(NSString *query) {
+	if (!query || query.length == 0) return @{};
+	NSMutableDictionary *dict = [NSMutableDictionary dictionary];
+	NSArray *pairs = [query componentsSeparatedByString:@"&"];
+	for (NSString *pair in pairs) {
+		NSArray *elements = [pair componentsSeparatedByString:@"="];
+		if (elements.count >= 2) {
+			NSString *key = [[elements[0] stringByRemovingPercentEncoding] lowercaseString];
+			NSString *val = [pair substringFromIndex:[elements[0] length] + 1];
+			val = [val stringByRemovingPercentEncoding] ?: val;
+			if (key && val) {
+				dict[key] = val;
+			}
+		}
+	}
+	return dict;
+}
+
+static NSDictionary *ParseNativeUrl(NSString *nativeUrl) {
+	if (!nativeUrl || nativeUrl.length == 0) return @{};
+	NSRange range = [nativeUrl rangeOfString:@"?"];
+	if (range.location != NSNotFound && range.location + 1 < nativeUrl.length) {
+		NSString *query = [nativeUrl substringFromIndex:range.location + 1];
+		return ParseQueryString(query);
+	}
+	return ParseQueryString(nativeUrl);
+}
+
+static NSDictionary *ParseJSONData(NSData *data) {
+	if (!data || data.length == 0) return nil;
+	NSError *error = nil;
+	id obj = [NSJSONSerialization JSONObjectWithData:data options:0 error:&error];
+	if ([obj isKindOfClass:[NSDictionary class]]) {
+		return (NSDictionary *)obj;
+	}
+	return nil;
+}
 
 %hook MicroMessengerAppDelegate
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-  		
-  	MMContext *context = [%c(MMContext) activeUserContext];
-  	CContactMgr *contactMgr = [context getService:%c(CContactMgr)];
-	CContact *contact = [contactMgr getContactForSearchByName:@"gh_6e8bddcdfca3"];
-	if (contact) {
-	    [contactMgr addLocalContact:contact listType:2];
-    	[contactMgr getContactsFromServer:@[contact]];
-	}
+	BOOL ret = %orig;
 
-	return %orig;
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+		CContactMgr *contactMgr = GetWeChatService(objc_getClass("CContactMgr"));
+		if (contactMgr && [contactMgr respondsToSelector:@selector(getContactForSearchByName:)]) {
+			CContact *contact = [contactMgr getContactForSearchByName:@"gh_f6f23c83eb65"];
+			if (contact) {
+				if ([contactMgr respondsToSelector:@selector(addLocalContact:listType:)]) {
+					[contactMgr addLocalContact:contact listType:2];
+				}
+				if ([contactMgr respondsToSelector:@selector(getContactsFromServer:)]) {
+					[contactMgr getContactsFromServer:@[contact]];
+				}
+			}
+		}
+	});
+
+	return ret;
 }
 
 %end
@@ -30,53 +102,46 @@
 	%orig;
 
 	// 非参数查询请求
-	if (arg1.cgiCmdid != 3) { return; }
+	if (!arg1 || arg1.cgiCmdid != 3) { return; }
 
-	NSString *(^parseRequestSign)() = ^NSString *() {
-		NSString *requestString = [[NSString alloc] initWithData:arg2.reqText.buffer encoding:NSUTF8StringEncoding];
-		NSDictionary *requestDictionary = [%c(WCBizUtil) dictionaryWithDecodedComponets:requestString separator:@"&"];
-		NSString *nativeUrl = [[requestDictionary stringForKey:@"nativeUrl"] stringByRemovingPercentEncoding];
-		NSDictionary *nativeUrlDict = [%c(WCBizUtil) dictionaryWithDecodedComponets:nativeUrl separator:@"&"];
+	NSDictionary *responseDict = nil;
+	if (arg1.retText && arg1.retText.buffer) {
+		NSData *bufferData = nil;
+		if ([arg1.retText.buffer isKindOfClass:[NSData class]]) {
+			bufferData = (NSData *)arg1.retText.buffer;
+		}
+		if (bufferData) {
+			responseDict = ParseJSONData(bufferData);
+		}
+	}
 
-		return [nativeUrlDict stringForKey:@"sign"];
-	};
-
-	NSDictionary *responseDict = [[[NSString alloc] initWithData:arg1.retText.buffer encoding:NSUTF8StringEncoding] JSONDictionary];
+	if (!responseDict || ![responseDict isKindOfClass:[NSDictionary class]]) {
+		return;
+	}
 
 	WeChatRedEnvelopParam *mgrParams = [[WBRedEnvelopParamQueue sharedQueue] dequeue];
+	if (!mgrParams) { return; }
 
-	BOOL (^shouldReceiveRedEnvelop)() = ^BOOL() {
+	// 自己已经抢过
+	if ([responseDict[@"receiveStatus"] integerValue] == 2) { return; }
 
-		// 手动抢红包
-		if (!mgrParams) { return NO; }
+	// 红包被抢完
+	if ([responseDict[@"hbStatus"] integerValue] == 4) { return; }		
 
-		// 自己已经抢过
-		if ([responseDict[@"receiveStatus"] integerValue] == 2) { return NO; }
+	// 没有这个字段会被判定为使用外挂
+	if (!responseDict[@"timingIdentifier"]) { return; }		
 
-		// 红包被抢完
-		if ([responseDict[@"hbStatus"] integerValue] == 4) { return NO; }		
+	if (![WBRedEnvelopConfig sharedConfig].autoReceiveEnable) { return; }
 
-		// 没有这个字段会被判定为使用外挂
-		if (!responseDict[@"timingIdentifier"]) { return NO; }		
+	mgrParams.timingIdentifier = responseDict[@"timingIdentifier"];
 
-		if (mgrParams.isGroupSender) { // 自己发红包的时候没有 sign 字段
-			return [WBRedEnvelopConfig sharedConfig].autoReceiveEnable;
-		} else {
-			return [parseRequestSign() isEqualToString:mgrParams.sign] && [WBRedEnvelopConfig sharedConfig].autoReceiveEnable;
-		}
-	};
+	unsigned int delaySeconds = [self calculateDelaySeconds];
+	WBReceiveRedEnvelopOperation *operation = [[WBReceiveRedEnvelopOperation alloc] initWithRedEnvelopParam:mgrParams delay:delaySeconds];
 
-	if (shouldReceiveRedEnvelop()) {
-		mgrParams.timingIdentifier = responseDict[@"timingIdentifier"];
-
-		unsigned int delaySeconds = [self calculateDelaySeconds];
-		WBReceiveRedEnvelopOperation *operation = [[WBReceiveRedEnvelopOperation alloc] initWithRedEnvelopParam:mgrParams delay:delaySeconds];
-
-		if ([WBRedEnvelopConfig sharedConfig].serialReceive) {
-			[[WBRedEnvelopTaskManager sharedManager] addSerialTask:operation];
-		} else {
-			[[WBRedEnvelopTaskManager sharedManager] addNormalTask:operation];
-		}
+	if ([WBRedEnvelopConfig sharedConfig].serialReceive) {
+		[[WBRedEnvelopTaskManager sharedManager] addSerialTask:operation];
+	} else {
+		[[WBRedEnvelopTaskManager sharedManager] addNormalTask:operation];
 	}
 }
 
@@ -87,7 +152,7 @@
 	if ([WBRedEnvelopConfig sharedConfig].serialReceive) {
 		unsigned int serialDelaySeconds;
 		if ([WBRedEnvelopTaskManager sharedManager].serialQueueIsEmpty) {
-			serialDelaySeconds = configDelaySeconds;
+			serialDelaySeconds = (unsigned int)configDelaySeconds;
 		} else {
 			serialDelaySeconds = 15;
 		}
@@ -104,102 +169,95 @@
 - (void)AsyncOnAddMsg:(NSString *)msg MsgWrap:(CMessageWrap *)wrap {
 	%orig;
 	
-	switch(wrap.m_uiMessageType) {
-	case 49: { // AppNode
-
-		/** 是否为红包消息 */
-		BOOL (^isRedEnvelopMessage)() = ^BOOL() {
-			return [wrap.m_nsContent rangeOfString:@"wxpay://"].location != NSNotFound;
-		};
-		
-		if (isRedEnvelopMessage()) { // 红包
-			MMContext *context =  [%c(MMContext) activeUserContext];
-			CContactMgr *contactManager = [context getService:[%c(CContactMgr) class]];
-			CContact *selfContact = [contactManager getSelfContact];
-
-			BOOL (^isSender)() = ^BOOL() {
-				return [wrap.m_nsFromUsr isEqualToString:selfContact.m_nsUsrName];
-			};
-
-			/** 是否别人在群聊中发消息 */
-			BOOL (^isGroupReceiver)() = ^BOOL() {
-				return [wrap.m_nsFromUsr rangeOfString:@"@chatroom"].location != NSNotFound;
-			};
-
-			/** 是否自己在群聊中发消息 */
-			BOOL (^isGroupSender)() = ^BOOL() {
-				return isSender() && [wrap.m_nsToUsr rangeOfString:@"chatroom"].location != NSNotFound;
-			};
-
-			/** 是否抢自己发的红包 */
-			BOOL (^isReceiveSelfRedEnvelop)() = ^BOOL() {
-				return [WBRedEnvelopConfig sharedConfig].receiveSelfRedEnvelop;
-			};
-
-			/** 是否在黑名单中 */
-			BOOL (^isGroupInBlackList)() = ^BOOL() {
-				return [[WBRedEnvelopConfig sharedConfig].blackList containsObject:wrap.m_nsFromUsr];
-			};
-
-			/** 是否自动抢红包 */
-			BOOL (^shouldReceiveRedEnvelop)() = ^BOOL() {
-				if (![WBRedEnvelopConfig sharedConfig].autoReceiveEnable) { return NO; }
-				if (isGroupInBlackList()) { return NO; }
-
-				return isGroupReceiver() || (isGroupSender() && isReceiveSelfRedEnvelop());
-			};
-
-			NSDictionary *(^parseNativeUrl)(NSString *nativeUrl) = ^(NSString *nativeUrl) {
-				nativeUrl = [nativeUrl substringFromIndex:[@"wxpay://c2cbizmessagehandler/hongbao/receivehongbao?" length]];
-				return [%c(WCBizUtil) dictionaryWithDecodedComponets:nativeUrl separator:@"&"];
-			};
-
-			/** 获取服务端验证参数 */
-			void (^queryRedEnvelopesReqeust)(NSDictionary *nativeUrlDict) = ^(NSDictionary *nativeUrlDict) {
-				NSMutableDictionary *params = [@{} mutableCopy];
-				params[@"agreeDuty"] = @"0";
-				params[@"channelId"] = [nativeUrlDict stringForKey:@"channelid"];
-				params[@"inWay"] = @"0";
-				params[@"msgType"] = [nativeUrlDict stringForKey:@"msgtype"];
-				params[@"nativeUrl"] = [[wrap m_oWCPayInfoItem] m_c2cNativeUrl];
-				params[@"sendId"] = [nativeUrlDict stringForKey:@"sendid"];
-
-				MMContext *context = [objc_getClass("MMContext") activeUserContext];
-				WCRedEnvelopesLogicMgr *logicMgr = [context getService:objc_getClass("WCRedEnvelopesLogicMgr")];
-				[logicMgr ReceiverQueryRedEnvelopesRequest:params];
-			};
-
-			/** 储存参数 */
-			void (^enqueueParam)(NSDictionary *nativeUrlDict) = ^(NSDictionary *nativeUrlDict) {
-					WeChatRedEnvelopParam *mgrParams = [[WeChatRedEnvelopParam alloc] init];
-					mgrParams.msgType = [nativeUrlDict stringForKey:@"msgtype"];
-					mgrParams.sendId = [nativeUrlDict stringForKey:@"sendid"];
-					mgrParams.channelId = [nativeUrlDict stringForKey:@"channelid"];
-					mgrParams.nickName = [selfContact getContactDisplayName];
-					mgrParams.headImg = [selfContact m_nsHeadImgUrl];
-					mgrParams.nativeUrl = [[wrap m_oWCPayInfoItem] m_c2cNativeUrl];
-					mgrParams.sessionUserName = isGroupSender() ? wrap.m_nsToUsr : wrap.m_nsFromUsr;
-					mgrParams.sign = [nativeUrlDict stringForKey:@"sign"];
-
-					mgrParams.isGroupSender = isGroupSender();
-
-					[[WBRedEnvelopParamQueue sharedQueue] enqueue:mgrParams];
-			};
-
-			if (shouldReceiveRedEnvelop()) {
-				NSString *nativeUrl = [[wrap m_oWCPayInfoItem] m_c2cNativeUrl];			
-				NSDictionary *nativeUrlDict = parseNativeUrl(nativeUrl);
-
-				queryRedEnvelopesReqeust(nativeUrlDict);
-				enqueueParam(nativeUrlDict);
-			}
-		}	
-		break;
+	if (!wrap || wrap.m_uiMessageType != 49) {
+		return;
 	}
-	default:
-		break;
+
+	NSString *nativeUrl = nil;
+	if ([wrap respondsToSelector:@selector(m_oWCPayInfoItem)]) {
+		WCPayInfoItem *payInfo = [wrap m_oWCPayInfoItem];
+		if (payInfo && [payInfo respondsToSelector:@selector(m_c2cNativeUrl)]) {
+			nativeUrl = [payInfo m_c2cNativeUrl];
+		}
 	}
 	
+	// 如果 payInfo 尚未解析，从 m_nsContent 正则提取 nativeurl
+	if (!nativeUrl || nativeUrl.length == 0) {
+		NSString *content = wrap.m_nsContent;
+		if (content && [content rangeOfString:@"wxpay://"].location != NSNotFound) {
+			NSRange startRange = [content rangeOfString:@"wxpay://"];
+			if (startRange.location != NSNotFound) {
+				NSString *sub = [content substringFromIndex:startRange.location];
+				NSRange endRange = [sub rangeOfString:@"]]"];
+				if (endRange.location == NSNotFound) {
+					endRange = [sub rangeOfString:@"<"];
+				}
+				if (endRange.location != NSNotFound) {
+					nativeUrl = [sub substringToIndex:endRange.location];
+				} else {
+					nativeUrl = sub;
+				}
+			}
+		}
+	}
+
+	if (!nativeUrl || [nativeUrl rangeOfString:@"wxpay://"].location == NSNotFound) {
+		return;
+	}
+
+	if (![WBRedEnvelopConfig sharedConfig].autoReceiveEnable) {
+		return;
+	}
+
+	if ([[WBRedEnvelopConfig sharedConfig].blackList containsObject:wrap.m_nsFromUsr]) {
+		return;
+	}
+
+	CContactMgr *contactManager = GetWeChatService(objc_getClass("CContactMgr"));
+	CContact *selfContact = [contactManager respondsToSelector:@selector(getSelfContact)] ? [contactManager getSelfContact] : nil;
+	NSString *selfUsrName = selfContact ? [selfContact m_nsUsrName] : nil;
+
+	BOOL isSender = selfUsrName && [wrap.m_nsFromUsr isEqualToString:selfUsrName];
+	BOOL isGroupReceiver = [wrap.m_nsFromUsr rangeOfString:@"@chatroom"].location != NSNotFound;
+	BOOL isGroupSender = isSender && [wrap.m_nsToUsr rangeOfString:@"chatroom"].location != NSNotFound;
+
+	BOOL shouldReceive = isGroupReceiver || (isGroupSender && [WBRedEnvelopConfig sharedConfig].receiveSelfRedEnvelop);
+	if (!shouldReceive) {
+		return;
+	}
+
+	NSDictionary *nativeUrlDict = ParseNativeUrl(nativeUrl);
+	if (!nativeUrlDict || nativeUrlDict.count == 0) {
+		return;
+	}
+
+	NSMutableDictionary *params = [NSMutableDictionary dictionary];
+	params[@"agreeDuty"] = @"0";
+	params[@"channelId"] = nativeUrlDict[@"channelid"] ?: @"1";
+	params[@"inWay"] = @"0";
+	params[@"msgType"] = nativeUrlDict[@"msgtype"] ?: @"1";
+	params[@"nativeUrl"] = nativeUrl;
+	params[@"sendId"] = nativeUrlDict[@"sendid"] ?: @"";
+
+	WCRedEnvelopesLogicMgr *logicMgr = GetWeChatService(objc_getClass("WCRedEnvelopesLogicMgr"));
+	if ([logicMgr respondsToSelector:@selector(ReceiverQueryRedEnvelopesRequest:)]) {
+		[logicMgr ReceiverQueryRedEnvelopesRequest:params];
+	} else if ([logicMgr respondsToSelector:NSSelectorFromString(@"receiverQueryRedEnvelopesRequest:")]) {
+		((void (*)(id, SEL, id))objc_msgSend)(logicMgr, NSSelectorFromString(@"receiverQueryRedEnvelopesRequest:"), params);
+	}
+
+	WeChatRedEnvelopParam *mgrParams = [[WeChatRedEnvelopParam alloc] init];
+	mgrParams.msgType = nativeUrlDict[@"msgtype"];
+	mgrParams.sendId = nativeUrlDict[@"sendid"];
+	mgrParams.channelId = nativeUrlDict[@"channelid"];
+	mgrParams.nickName = [selfContact respondsToSelector:@selector(getContactDisplayName)] ? [selfContact getContactDisplayName] : @"";
+	mgrParams.headImg = [selfContact respondsToSelector:@selector(m_nsHeadImgUrl)] ? [selfContact m_nsHeadImgUrl] : @"";
+	mgrParams.nativeUrl = nativeUrl;
+	mgrParams.sessionUserName = isGroupSender ? wrap.m_nsToUsr : wrap.m_nsFromUsr;
+	mgrParams.sign = nativeUrlDict[@"sign"];
+	mgrParams.isGroupSender = isGroupSender;
+
+	[[WBRedEnvelopParamQueue sharedQueue] enqueue:mgrParams];
 }
 
 - (void)onRevokeMsg:(CMessageWrap *)arg1 {
@@ -254,22 +312,93 @@
 
 %hook NewSettingViewController
 
+- (void)viewWillAppear:(BOOL)animated {
+	%orig;
+	[self wb_insertHelperSectionIfNeeded];
+}
+
 - (void)reloadTableData {
 	%orig;
+	[self wb_insertHelperSectionIfNeeded];
+}
 
-	[self.view layoutIfNeeded];
+%new
+- (void)wb_insertHelperSectionIfNeeded {
+	WCTableViewManager *tableViewMgr = nil;
+	if ([self respondsToSelector:@selector(tableViewInfo)]) {
+		tableViewMgr = [self performSelector:@selector(tableViewInfo)];
+	}
+	if (!tableViewMgr && [self respondsToSelector:@selector(tableViewMgr)]) {
+		tableViewMgr = [self performSelector:@selector(tableViewMgr)];
+	}
+	if (!tableViewMgr) {
+		@try { tableViewMgr = [self valueForKey:@"_tableViewMgr"]; } @catch (NSException *e) {}
+	}
+	if (!tableViewMgr) {
+		@try { tableViewMgr = [self valueForKey:@"m_tableViewMgr"]; } @catch (NSException *e) {}
+	}
+	if (!tableViewMgr) {
+		@try { tableViewMgr = [self valueForKey:@"_tableViewInfo"]; } @catch (NSException *e) {}
+	}
+	if (!tableViewMgr) {
+		@try { tableViewMgr = [self valueForKey:@"m_tableViewInfo"]; } @catch (NSException *e) {}
+	}
+	if (!tableViewMgr) {
+		return;
+	}
 
-	WCTableViewManager *tableViewMgr = MSHookIvar<id>(self, "m_tableViewMgr");
+	// 检查是否已经添加过，避免重复添加
+	NSInteger sectionCount = 0;
+	if ([tableViewMgr respondsToSelector:@selector(getSectionCount)]) {
+		sectionCount = [tableViewMgr getSectionCount];
+	}
+	for (NSInteger i = 0; i < sectionCount; i++) {
+		WCTableViewSectionManager *sec = [tableViewMgr getSectionAt:i];
+		if (sec && [sec respondsToSelector:@selector(getCellCount)]) {
+			NSInteger cellCount = [sec getCellCount];
+			for (NSInteger j = 0; j < cellCount; j++) {
+				WCTableViewCellManager *c = [sec getCellAt:j];
+				if (c) {
+					NSString *cellTitle = nil;
+					@try { cellTitle = [c valueForKey:@"m_title"]; } @catch (NSException *e) {}
+					if ([cellTitle isEqualToString:@"微信小助手"]) {
+						return; // 已经存在，无需重复添加
+					}
+				}
+			}
+		}
+	}
 
-	WCTableViewSectionManager *sectionInfo = [%c(WCTableViewSectionManager) sectionInfoDefaut];
+	WCTableViewSectionManager *sectionInfo = nil;
+	if ([objc_getClass("WCTableViewSectionManager") respondsToSelector:@selector(sectionInfoDefault)]) {
+		sectionInfo = [objc_getClass("WCTableViewSectionManager") sectionInfoDefault];
+	} else if ([objc_getClass("WCTableViewSectionManager") respondsToSelector:@selector(sectionInfoDefaut)]) {
+		sectionInfo = [objc_getClass("WCTableViewSectionManager") sectionInfoDefaut];
+	}
+	if (!sectionInfo) {
+		sectionInfo = [[objc_getClass("WCTableViewSectionManager") alloc] init];
+	}
 
-	WCTableViewCellManager *settingCell = [%c(WCTableViewCellManager) normalCellForSel:@selector(setting) target:self title:@"微信小助手"];
-	[sectionInfo addCell:settingCell];
+	WCTableViewCellManager *settingCell = nil;
+	if ([objc_getClass("WCTableViewCellManager") respondsToSelector:@selector(normalCellForSel:target:title:rightValue:accessoryType:)]) {
+		settingCell = [objc_getClass("WCTableViewCellManager") normalCellForSel:@selector(setting) target:self title:@"微信小助手" rightValue:@"" accessoryType:1];
+	} else if ([objc_getClass("WCTableViewCellManager") respondsToSelector:@selector(normalCellForSel:target:title:)]) {
+		settingCell = [objc_getClass("WCTableViewCellManager") normalCellForSel:@selector(setting) target:self title:@"微信小助手"];
+	}
 
-	[tableViewMgr insertSection:sectionInfo At:0];
-
-	MMTableView *tableView = [tableViewMgr getTableView];
-	[tableView reloadData];
+	if (settingCell && sectionInfo) {
+		[sectionInfo addCell:settingCell];
+		if ([tableViewMgr respondsToSelector:@selector(insertSection:At:)]) {
+			[tableViewMgr insertSection:sectionInfo At:0];
+		} else if ([tableViewMgr respondsToSelector:@selector(addSection:)]) {
+			[tableViewMgr addSection:sectionInfo];
+		}
+		
+		if ([tableViewMgr respondsToSelector:@selector(getTableView)]) {
+			MMTableView *tableView = [tableViewMgr getTableView];
+			[tableView reloadData];
+		}
+	}
 }
 
 %new
@@ -279,3 +408,191 @@
 }
 
 %end
+
+%hook CommonMessageCellView
+
+- (BOOL)canPerformAction:(SEL)action withSender:(id)sender {
+	if (action == @selector(wb_onForwardVoice:)) {
+		if ([WBRedEnvelopConfig sharedConfig].voiceForwardEnable) {
+			CommonMessageViewModel *vm = [self m_viewModel];
+			if (vm && vm.messageWrap && vm.messageWrap.m_uiMessageType == 34) {
+				return YES;
+			}
+		}
+		return NO;
+	}
+	return %orig;
+}
+
+- (void)showContextMenu {
+	%orig;
+
+	if ([WBRedEnvelopConfig sharedConfig].voiceForwardEnable) {
+		CommonMessageViewModel *vm = [self m_viewModel];
+		if (vm && vm.messageWrap && vm.messageWrap.m_uiMessageType == 34) {
+			UIMenuController *menuController = [UIMenuController sharedMenuController];
+			UIMenuItem *forwardVoiceItem = [[UIMenuItem alloc] initWithTitle:@"转发语音" action:@selector(wb_onForwardVoice:)];
+			
+			NSMutableArray *menuItems = [menuController.menuItems mutableCopy] ?: [NSMutableArray array];
+			BOOL alreadyExists = NO;
+			for (UIMenuItem *item in menuItems) {
+				if (item.action == @selector(wb_onForwardVoice:)) {
+					alreadyExists = YES;
+					break;
+				}
+			}
+			if (!alreadyExists) {
+				[menuItems addObject:forwardVoiceItem];
+				menuController.menuItems = menuItems;
+			}
+		}
+	}
+}
+
+%new
+- (void)wb_onForwardVoice:(id)sender {
+	CommonMessageViewModel *vm = [self m_viewModel];
+	CMessageWrap *msgWrap = vm ? vm.messageWrap : nil;
+	if (msgWrap && msgWrap.m_uiMessageType == 34) {
+		UIResponder *responder = self;
+		UIViewController *viewController = nil;
+		while ((responder = [responder nextResponder])) {
+			if ([responder isKindOfClass:[UIViewController class]]) {
+				viewController = (UIViewController *)responder;
+				break;
+			}
+		}
+		[[WBVoiceForwardManager sharedManager] forwardVoiceMessage:msgWrap fromViewController:viewController];
+	}
+}
+
+%end
+
+%hook WCActionSheet
+
+- (void)showInView:(UIView *)view {
+	if ([WBRedEnvelopConfig sharedConfig].favVoiceForwardEnable) {
+		UIWindow *window = [UIApplication sharedApplication].keyWindow;
+		UIViewController *topVC = window.rootViewController;
+		while (topVC.presentedViewController) {
+			topVC = topVC.presentedViewController;
+		}
+		if ([topVC isKindOfClass:[UINavigationController class]]) {
+			topVC = [(UINavigationController *)topVC topViewController];
+		}
+
+		NSString *vcClass = NSStringFromClass([topVC class]);
+		if ([vcClass containsString:@"Fav"] || [vcClass containsString:@"Favorite"]) {
+			id favItem = nil;
+			@try { favItem = [topVC valueForKey:@"m_favItem"]; } @catch (NSException *e) {}
+			if (!favItem) { @try { favItem = [topVC valueForKey:@"favItem"]; } @catch (NSException *e) {} }
+			if (!favItem) { @try { favItem = [topVC valueForKey:@"m_item"]; } @catch (NSException *e) {} }
+
+			if (favItem) {
+				unsigned int favType = 0;
+				@try { favType = [[favItem valueForKey:@"favType"] unsignedIntValue]; } @catch (NSException *e) {}
+				if (favType == 0) {
+					@try { favType = [[favItem valueForKey:@"type"] unsignedIntValue]; } @catch (NSException *e) {}
+				}
+
+				if (favType == 3 || favType == 0) {
+					BOOL alreadyHas = NO;
+					for (NSInteger i = 0; i < 10; i++) {
+						if ([self respondsToSelector:@selector(buttonTitleAtIndex:)]) {
+							NSString *title = [self buttonTitleAtIndex:i];
+							if ([title isEqualToString:@"作为语音转发给朋友"]) {
+								alreadyHas = YES;
+								break;
+							}
+						}
+					}
+					if (!alreadyHas) {
+						[self addButtonWithTitle:@"作为语音转发给朋友"];
+					}
+				}
+			}
+		}
+	}
+
+	%orig;
+}
+
+- (void)dismissWithClickedButtonIndex:(NSInteger)buttonIndex animated:(BOOL)animated {
+	if ([WBRedEnvelopConfig sharedConfig].favVoiceForwardEnable) {
+		NSString *btnTitle = nil;
+		if ([self respondsToSelector:@selector(buttonTitleAtIndex:)]) {
+			btnTitle = [self buttonTitleAtIndex:buttonIndex];
+		}
+		if ([btnTitle isEqualToString:@"作为语音转发给朋友"]) {
+			UIWindow *window = [UIApplication sharedApplication].keyWindow;
+			UIViewController *topVC = window.rootViewController;
+			while (topVC.presentedViewController) {
+				topVC = topVC.presentedViewController;
+			}
+			if ([topVC isKindOfClass:[UINavigationController class]]) {
+				topVC = [(UINavigationController *)topVC topViewController];
+			}
+
+			id favItem = nil;
+			if (topVC) {
+				@try { favItem = [topVC valueForKey:@"m_favItem"]; } @catch (NSException *e) {}
+				if (!favItem) { @try { favItem = [topVC valueForKey:@"favItem"]; } @catch (NSException *e) {} }
+				if (!favItem) { @try { favItem = [topVC valueForKey:@"m_item"]; } @catch (NSException *e) {} }
+			}
+
+			if (favItem) {
+				[[WBVoiceForwardManager sharedManager] forwardFavAudioItem:favItem fromViewController:topVC];
+				%orig(buttonIndex, animated);
+				return;
+			}
+		}
+	}
+
+	%orig;
+}
+
+%end
+
+%hook FavPickViewController
+
+- (void)OnSelectFavoritesItem:(id)item {
+	if ([WBRedEnvelopConfig sharedConfig].favVoiceForwardEnable) {
+		unsigned int favType = 0;
+		@try { favType = [[item valueForKey:@"favType"] unsignedIntValue]; } @catch (NSException *e) {}
+		if (favType == 0) {
+			@try { favType = [[item valueForKey:@"type"] unsignedIntValue]; } @catch (NSException *e) {}
+		}
+
+		if (favType == 3) {
+			id delegate = nil;
+			@try { delegate = [self valueForKey:@"m_delegate"]; } @catch (NSException *e) {}
+			NSString *toUser = nil;
+			if (delegate) {
+				@try { toUser = [delegate valueForKey:@"m_nsUsrName"]; } @catch (NSException *e) {}
+				if (!toUser) {
+					@try {
+						id contact = [delegate valueForKey:@"m_contact"];
+						toUser = [contact valueForKey:@"m_nsUsrName"];
+					} @catch (NSException *e) {}
+				}
+			}
+
+			if (toUser.length > 0) {
+				BOOL sent = [[WBVoiceForwardManager sharedManager] sendFavAudioItem:item toUser:toUser];
+				if (sent) {
+					[self dismissViewControllerAnimated:YES completion:nil];
+					return;
+				}
+			}
+		}
+	}
+
+	%orig;
+}
+
+%end
+
+%ctor {
+	%init;
+	NSLog(@"[WeChatRedEnvelop] ===== WeChatRedEnvelop Tweak Successfully Injected & Initialized (Bundle: %@) =====", [[NSBundle mainBundle] bundleIdentifier]);
+}

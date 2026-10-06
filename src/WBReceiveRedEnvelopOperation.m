@@ -48,12 +48,34 @@
     self.finished = NO;
 }
 
+static id GetWeChatService(Class serviceClass) {
+    if (objc_getClass("MMContext")) {
+        MMContext *context = [objc_getClass("MMContext") activeUserContext];
+        if (context && [context respondsToSelector:@selector(getService:)]) {
+            id service = [context getService:serviceClass];
+            if (service) return service;
+        }
+    }
+    if (objc_getClass("MMServiceCenter")) {
+        id center = [objc_getClass("MMServiceCenter") performSelector:@selector(defaultCenter)];
+        if (center && [center respondsToSelector:@selector(getService:)]) {
+            return [center performSelector:@selector(getService:) withObject:serviceClass];
+        }
+    }
+    return nil;
+}
+
 - (void)main {
     sleep(self.delaySeconds);
     
-    MMContext *context =  [objc_getClass("MMContext") activeUserContext];
-    WCRedEnvelopesLogicMgr *logicMgr = [context getService:objc_getClass("WCRedEnvelopesLogicMgr")];
-    [logicMgr OpenRedEnvelopesRequest:[self.redEnvelopParam toParams]];
+    WCRedEnvelopesLogicMgr *logicMgr = GetWeChatService(objc_getClass("WCRedEnvelopesLogicMgr"));
+    if ([logicMgr respondsToSelector:@selector(OpenRedEnvelopesRequest:)]) {
+        [logicMgr OpenRedEnvelopesRequest:[self.redEnvelopParam toParams]];
+    } else if ([logicMgr respondsToSelector:NSSelectorFromString(@"openRedEnvelopesRequest:")]) {
+        ((void (*)(id, SEL, id))objc_msgSend)(logicMgr, NSSelectorFromString(@"openRedEnvelopesRequest:"), [self.redEnvelopParam toParams]);
+    } else {
+        NSLog(@"[WeChatRedEnvelop] 未找到 OpenRedEnvelopesRequest 接口");
+    }
     
     self.finished = YES;
     self.executing = NO;

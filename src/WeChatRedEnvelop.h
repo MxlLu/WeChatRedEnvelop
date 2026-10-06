@@ -25,6 +25,8 @@
 @interface CMessageMgr : NSObject
 
 - (void)AddLocalMsg:(id)arg1 MsgWrap:(id)arg2 fixTime:(_Bool)arg3 NewMsgArriveNotify:(_Bool)arg4;
+- (void)AddMsg:(id)arg1 MsgWrap:(id)arg2;
+- (void)ResendMsg:(id)arg1 MsgWrap:(id)arg2;
 
 @end
 
@@ -56,8 +58,67 @@
 @property (retain, nonatomic) NSString *m_nsTitle;
 @property (retain, nonatomic) NSString *m_nsMsgSource;
 
+/** Voice Message Properties */
+@property (assign, nonatomic) NSUInteger m_uiVoiceTime;
+@property (assign, nonatomic) NSUInteger m_uiVoiceFormat;
+@property (retain, nonatomic) NSData *m_dtVoice;
+@property (retain, nonatomic) NSString *m_nsFilePath;
+
 - (id)initWithMsgType:(long long)arg1;
 + (_Bool)isSenderFromMsgWrap:(id)arg1;
++ (id)getVoicePathByMessageWrap:(id)arg1;
+
+@end
+
+#pragma mark - Audio & MessageCell
+
+@interface AudioSender : NSObject
+
+- (void)ResendVoiceMsg:(id)arg1 MsgWrap:(id)arg2;
+- (void)SendAudioMsg:(id)arg1 MsgWrap:(id)arg2;
+
+@end
+
+@interface CommonMessageViewModel : NSObject
+
+@property(retain, nonatomic) CMessageWrap *messageWrap;
+
+@end
+
+@interface CommonMessageCellView : UIView
+
+@property(readonly, nonatomic) CommonMessageViewModel *m_viewModel;
+
+- (BOOL)canPerformAction:(SEL)action withSender:(id)sender;
+- (void)showContextMenu;
+- (id)viewController;
+
+@end
+
+#pragma mark - Favorites
+
+@interface FavoritesItemDataField : NSObject
+
+@property(assign, nonatomic) unsigned int dataType;
+@property(assign, nonatomic) unsigned int duration;
+@property(retain, nonatomic) NSString *dataPath;
+@property(retain, nonatomic) NSString *dataFmt;
+
+@end
+
+@interface FavoritesItem : NSObject
+
+@property(assign, nonatomic) unsigned int favId;
+@property(assign, nonatomic) unsigned int localId;
+@property(assign, nonatomic) unsigned int favType;
+@property(retain, nonatomic) NSArray *dataList;
+
+@end
+
+@interface WCActionSheet : UIView
+
+- (NSInteger)addButtonWithTitle:(id)title;
+- (id)buttonTitleAtIndex:(NSInteger)index;
 
 @end
 

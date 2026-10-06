@@ -1,0 +1,73 @@
+name: Build WeChatRedEnvelop
+
+on:
+  push:
+    branches: [ master, main ]
+    paths-ignore:
+      - '**.md'
+      - 'ScreenShots/**'
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch: # 支持在 GitHub 网页上手动点击按钮触发构建
+
+jobs:
+  build:
+    name: Build iOS Packages
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install System Dependencies
+        run: |
+          brew install ldid dpkg
+
+      - name: Set up Theos
+        run: |
+          git clone --recursive https://github.com/theos/theos.git ~/theos
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+
+      - name: Set up iOS SDKs
+        run: |
+          git clone --depth=1 https://github.com/theos/sdks.git /tmp/theos-sdks
+          cp -r /tmp/theos-sdks/*.sdk ~/theos/sdks/
+          rm -rf /tmp/theos-sdks
+
+      - name: Create Artifact Directory
+        run: |
+          mkdir -p build-output
+
+      - name: 1. Build Rootless DEB (iOS 15+ Dopamine / Palera1n)
+        run: |
+          THEOS_PACKAGE_SCHEME=rootless make clean package FINALPACKAGE=1
+          cp packages/*.deb build-output/
+          rm -rf packages
+
+      - name: 2. Build Rootful DEB (iOS 14- unc0ver / Checkra1n)
+        run: |
+          make clean package FINALPACKAGE=1
+          cp packages/*.deb build-output/
+          rm -rf packages
+
+      - name: 3. Build TrollStore / Sideload Dylib & Bundle
+        run: |
+          make clean all FINALPACKAGE=1
+          mkdir -p dylib_package
+          find .theos/obj -name "WeChatRedEnvelop.dylib" -exec cp {} dylib_package/ \;
+          if [ -d ".theos/obj/com.swiftyper.wechatredenvelop.bundle" ]; then
+            cp -r .theos/obj/com.swiftyper.wechatredenvelop.bundle dylib_package/
+          elif [ -d "Resources" ]; then
+            mkdir -p dylib_package/com.swiftyper.wechatredenvelop.bundle
+            cp -r Resources/* dylib_package/com.swiftyper.wechatredenvelop.bundle/
+          fi
+          cd dylib_package && zip -r ../build-output/WeChatRedEnvelop_TrollStore_Dylib.zip . && cd ..
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: WeChatRedEnvelop-Build-Artifacts
+          path: build-output/*
+          if-no-files-found: error

@@ -15,6 +15,8 @@ static NSString * const kReceiveSelfRedEnvelopKey = @"WBReceiveSelfRedEnvelopKey
 static NSString * const kSerialReceiveKey = @"WBSerialReceiveKey";
 static NSString * const kBlackListKey = @"WBBlackListKey";
 static NSString * const kRevokeEnablekey = @"WBRevokeEnable";
+static NSString * const kVoiceForwardEnableKey = @"WBVoiceForwardEnableKey";
+static NSString * const kFavVoiceForwardEnableKey = @"WBFavVoiceForwardEnableKey";
 
 @interface WBRedEnvelopConfig ()
 
@@ -39,6 +41,12 @@ static NSString * const kRevokeEnablekey = @"WBRevokeEnable";
         _blackList = [[NSUserDefaults standardUserDefaults] objectForKey:kBlackListKey];
         _receiveSelfRedEnvelop = [[NSUserDefaults standardUserDefaults] boolForKey:kReceiveSelfRedEnvelopKey];
         _revokeEnable = [[NSUserDefaults standardUserDefaults] boolForKey:kRevokeEnablekey];
+
+        id voiceForwardVal = [[NSUserDefaults standardUserDefaults] objectForKey:kVoiceForwardEnableKey];
+        _voiceForwardEnable = voiceForwardVal ? [voiceForwardVal boolValue] : YES;
+
+        id favVoiceForwardVal = [[NSUserDefaults standardUserDefaults] objectForKey:kFavVoiceForwardEnableKey];
+        _favVoiceForwardEnable = favVoiceForwardVal ? [favVoiceForwardVal boolValue] : YES;
     }
     return self;
 }
@@ -82,6 +90,20 @@ static NSString * const kRevokeEnablekey = @"WBRevokeEnable";
     _revokeEnable = revokeEnable;
     
     [[NSUserDefaults standardUserDefaults] setBool:revokeEnable forKey:kRevokeEnablekey];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+}
+
+- (void)setVoiceForwardEnable:(BOOL)voiceForwardEnable {
+    _voiceForwardEnable = voiceForwardEnable;
+    
+    [[NSUserDefaults standardUserDefaults] setBool:voiceForwardEnable forKey:kVoiceForwardEnableKey];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+}
+
+- (void)setFavVoiceForwardEnable:(BOOL)favVoiceForwardEnable {
+    _favVoiceForwardEnable = favVoiceForwardEnable;
+    
+    [[NSUserDefaults standardUserDefaults] setBool:favVoiceForwardEnable forKey:kFavVoiceForwardEnableKey];
     [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
