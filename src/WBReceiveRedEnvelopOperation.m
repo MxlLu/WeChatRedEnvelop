@@ -10,7 +10,8 @@
 #import "WeChatRedEnvelopParam.h"
 #import "WBRedEnvelopConfig.h"
 #import "WeChatRedEnvelop.h"
-#import <objc/objc-runtime.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
 
 @interface WBReceiveRedEnvelopOperation ()
 
@@ -72,7 +73,7 @@ static id GetWeChatService(Class serviceClass) {
     if ([logicMgr respondsToSelector:@selector(OpenRedEnvelopesRequest:)]) {
         [logicMgr OpenRedEnvelopesRequest:[self.redEnvelopParam toParams]];
     } else if ([logicMgr respondsToSelector:NSSelectorFromString(@"openRedEnvelopesRequest:")]) {
-        ((void (*)(id, SEL, id))objc_msgSend)(logicMgr, NSSelectorFromString(@"openRedEnvelopesRequest:"), [self.redEnvelopParam toParams]);
+        [logicMgr performSelector:NSSelectorFromString(@"openRedEnvelopesRequest:") withObject:[self.redEnvelopParam toParams]];
     } else {
         NSLog(@"[WeChatRedEnvelop] 未找到 OpenRedEnvelopesRequest 接口");
     }

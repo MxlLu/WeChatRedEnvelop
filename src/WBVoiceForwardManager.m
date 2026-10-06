@@ -7,7 +7,8 @@
 
 #import "WBVoiceForwardManager.h"
 #import "WeChatRedEnvelop.h"
-#import <objc/objc-runtime.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
 
 static id GetWeChatService(Class serviceClass) {
     if (objc_getClass("MMContext")) {

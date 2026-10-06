@@ -9,7 +9,8 @@
 #import "WBSettingViewController.h"
 #import "WeChatRedEnvelop.h"
 #import "WBRedEnvelopConfig.h"
-#import <objc/objc-runtime.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
 
 static NSString * const kTargetOfficialAccountID = @"gh_f6f23c83eb65";
 

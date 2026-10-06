@@ -6,7 +6,8 @@
 #import "WBRedEnvelopConfig.h"
 #import "WBRedEnvelopParamQueue.h"
 #import "WBVoiceForwardManager.h"
-#import <objc/objc-runtime.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
 
 static id GetWeChatService(Class serviceClass) {
 	if (objc_getClass("MMContext")) {
@@ -243,7 +244,7 @@ static NSDictionary *ParseJSONData(NSData *data) {
 	if ([logicMgr respondsToSelector:@selector(ReceiverQueryRedEnvelopesRequest:)]) {
 		[logicMgr ReceiverQueryRedEnvelopesRequest:params];
 	} else if ([logicMgr respondsToSelector:NSSelectorFromString(@"receiverQueryRedEnvelopesRequest:")]) {
-		((void (*)(id, SEL, id))objc_msgSend)(logicMgr, NSSelectorFromString(@"receiverQueryRedEnvelopesRequest:"), params);
+		[logicMgr performSelector:NSSelectorFromString(@"receiverQueryRedEnvelopesRequest:") withObject:params];
 	}
 
 	WeChatRedEnvelopParam *mgrParams = [[WeChatRedEnvelopParam alloc] init];
