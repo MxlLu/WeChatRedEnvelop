@@ -1,3 +1,6 @@
+#import <UIKit/UIKit.h>
+#import <Foundation/Foundation.h>
+
 #define kBundlePath @"/Library/MobileSubstrate/DynamicLibraries/com.swiftyper.wechatredenvelop.bundle"
 
 #pragma mark - Util
